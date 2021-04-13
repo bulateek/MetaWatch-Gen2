@@ -14,27 +14,20 @@
 //  limitations under the License.
 //==============================================================================
 
-/******************************************************************************/
-/*! \file Messages.h
- *
- */
-/******************************************************************************/
-
 #ifndef MESSAGES_H
 #define MESSAGES_H
 
 /*******************************************************************************
     Description:  Constants related to the host packet format
 *******************************************************************************/
-#include "hal_lcd.h"
 
-#define MSG_BUFFER_LENGTH     ( 32 )
-#define MSG_HEADER_LENGTH     ( 4 )
-#define MSG_CRC_LENGTH        ( 2 )
-#define MSG_OVERHEAD_LENGTH   ( 6 )
+#define MSG_BUFFER_LENGTH     32
+#define MSG_HEADER_LENGTH     4
+#define MSG_CRC_LENGTH        2
+#define MSG_OVERHEAD_LENGTH   (MSG_HEADER_LENGTH + MSG_CRC_LENGTH)
 #define MSG_PAYLOAD_LENGTH    (MSG_BUFFER_LENGTH - MSG_OVERHEAD_LENGTH)
-#define MSG_FRM_START         (0x01)
-#define FRAME_HEADER_LEN      (2) // Flag + frame length
+#define MSG_FRM_START         0x01
+#define FRAME_HEADER_LEN      2 // Flag + frame length
 
 // see BufferPool.c
 #define MSG_RELATIVE_INDEX_FLG  (-4)
@@ -61,49 +54,10 @@ typedef struct
   unsigned char Length;
   unsigned char Type;
   unsigned char Options;
-  unsigned char * pBuffer;
+  unsigned char *pBuffer;
 } tMessage;
 
-/*! Host Message Packet Format
- *
- * \note This message format is also used internally but not all fields are used.
- *
- * \param startByte is always 0x01
- * \param Length is total number of bytes including start and crc
- * \param Type is the message type
- * \param Options is a byte to hold message options
- * \param pPayload is an array of bytes
- * \param crcLsb
- * \param crcMsb
- *
- * \note
- * The CRC is CCITT 16 intialized with 0xFFFF and bit reversed generation
- * not pretty, but it's what the MSP430 hardware does. A test vector is:
- *
- * CRC({0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37, 0x38, 0x39}) = 0x89F6
- *
- * SPP can deliver a partial packet if the link times out so bytes are needed to
- * re-assemble/frame a message.
- *
- * The Get Device Type message is 0x01, 0x06, 0x01, 0x00, 0x0B, 0xD9.
- *
- * \note Deprecated - This format is not used internally BUT IS STILL THE
- * FORMAT FOR MESSAGES SENT TO THE HOST
- */
-#if 0
-typedef struct
-{
-  unsigned char startByte;
-  unsigned char Length;
-  unsigned char Type;
-  unsigned char Options;
-  unsigned char pPayload[MSG_MAX_PAYLOAD_LENGTH];
-  unsigned char crcLsb;
-  unsigned char crcMsb;
-
-} tHostMsg;
-
-#endif
+#define MESSAGE_SIZE      (sizeof(tMessage))
 
 /*! Message type enumeration
  *
@@ -111,8 +65,6 @@ typedef struct
  */
 typedef enum
 {
-  InvalidMsg = 0x00,
-
   DevTypeMsg = 0x01,
   DevTypeRespMsg = 0x02,
   VerInfoMsg = 0x03,
@@ -142,12 +94,14 @@ typedef enum
   OledCrownMenuButtonMsg = 0x17,
 
   /* Music Play State */
-  MusicPlayStateMsg = 0x18,
+  MusicStateMsg = 0x18,
 
   /* draw text/bitmap */
   DrawMsg = 0x19,
 
   SetCliCfgMsg = 0x1a,
+  HidMsg = 0x1b,
+  MusicIconMsg = 0x1c,
   
   /*
    * Status and control
@@ -157,10 +111,11 @@ typedef enum
   AdvanceWatchHandsMsg = 0x20,
 
   TermModeMsg = 0x21,
+  FieldTestMsg = 0x22,
   
-  /* config and (dis)enable vibrate */
-  SetVibrateMode = 0x23,
+  VibrateMsg = 0x23,
   ButtonStateMsg = 0x24,
+  StopTimerMsg = 0x25,
 
   /* Sets the RTC */
   SetRtcMsg = 0x26,
@@ -197,7 +152,7 @@ typedef enum
   WriteToTemplateMsg = 0x4c,
   SetClockWidgetSettingsMsg = 0x4d,
   DrawClockWidgetMsg = 0x4e,
-
+  LogMsg = 0x4f,
   SetExtWidgetMsg = 0x50,
   UpdateClockMsg = 0x51,
   MonitorBatteryMsg = 0x52,
@@ -221,7 +176,8 @@ typedef enum
   IdleUpdateMsg = 0xa0,
   SetWidgetListMsg = 0xa1, // for new UI
   WatchDrawnScreenTimeout = 0xa2,
-  AncsMsg = 0xa3,
+  AncsNotifMsg = 0xa3,
+  AncsGetAttrMsg = 0xa4,
 
   ChangeModeMsg = 0xa6,
   ModeTimeoutMsg = 0xa7,
@@ -235,13 +191,13 @@ typedef enum
   ToggleSecondsMsg = 0xaf,
 
   /* BLE messages */
-  SetHeartbeatMsg = 0xb0,
-  HeartbeatTimeoutMsg = 0xb1,
+  HeartbeatMsg = 0xb0,
+  HBToutMsg = 0xb1,
   UpdConnParamMsg = 0xb2,
 
   /* HFP messages */
   CallerIdIndMsg = 0xb3,
-  CallerNameMsg = 0xb4,
+  ShowCallMsg = 0xb4,
   CallerIdMsg = 0xb5,
   HfpMsg = 0xb6,
   
@@ -255,7 +211,7 @@ typedef enum
   IntervalTimeoutMsg = 0xbc,
 
   SppAckMsg = 0xcc,
-  CountDownMsg = 0xcd,
+  CountdownMsg = 0xcd,
   SetCountdownDoneMsg = 0xce,
   
   QueryMemoryMsg = 0xd0,
@@ -269,7 +225,8 @@ typedef enum
   
   EnableAdvMsg = 0xf1,
   SetAdvDataMsg = 0xf2,
-  SetScanRespMsg = 0xf3
+  SetScanRespMsg = 0xf3,
+  ScanMsg = 0xf4
 } eMessageType;
 
 #define MAXIMUM_MESSAGE_TYPES      (256)
@@ -319,6 +276,9 @@ typedef enum
 #define MSG_OPT_IND_CALLERID   (1)
 #define MSG_OPT_HB_MWM         (0)
 
+/* options for vibration control */
+#define MSG_OPT_VIBRA_OFF       (0xFF)
+
 /* options for the heartbeat message */
 #define MSG_OPT_HEARTBEAT_MASTER (0x0)
 
@@ -339,10 +299,10 @@ typedef enum
 #define MSG_OPT_HFP_RING_STOP  (3)
 #define MSG_OPT_HFP_SCO_CONN   (4)
 
-#define SHOW_NOTIF_CALLER_ID   (0)
-#define SHOW_NOTIF_CALLER_NAME (1)
-#define SHOW_NOTIF_END         (2)
-#define SHOW_NOTIF_REJECT_CALL (3)
+#define CALLER_NAME      (0)
+#define CALLER_NUMBER    (1)
+#define CALL_END         (2)
+#define CALL_REJECTED    (3)
 
 /* options for MAP Indication message */
 #define MSG_OPT_MAP_IND_TYPE        (0)
@@ -355,6 +315,24 @@ typedef enum
 #define MSG_OPT_BT_STATE_DISCONN    (1)
 #define MSG_OPT_INIT_BONDING        (1)
 
+/* options for music control */
+#define MSG_OPT_MUSIC_CHANGE_END      0x00
+#define MSG_OPT_MUSIC_VOL_UP          0x01
+#define MSG_OPT_MUSIC_VOL_DOWN        0x02
+#define MSG_OPT_MUSIC_PLAY            0x04
+#define MSG_OPT_MUSIC_NEXT            0x08
+
+/* options for SPP */
+#define MSG_OPT_DISCONN             1
+
+/* options for Field testing */
+#define FIELD_TEST_ENTER            0
+#define FIELD_TEST_TIMEOUT          1
+#define FIELD_TEST_BUTTON_A         2
+#define FIELD_TEST_BUTTON_B         3
+#define FIELD_TEST_BUTTON_C         4
+#define FIELD_TEST_EXIT             5
+
 /* make mode definitions the same as buffer definitions */
 #define IDLE_MODE         (0)
 #define APP_MODE          (1)
@@ -362,21 +340,6 @@ typedef enum
 #define MUSIC_MODE        (3)
 #define MODE_NUM          (4)
 #define MODE_MASK         (0x3)
-
-/* Timeout for OneSecondTimer */
-#define TOUT_MONITOR_BATTERY          (10) //second
-#define TOUT_BACKLIGHT                (5) //second
-#define TOUT_IDLE_MODE                (0xFFFF)
-#define TOUT_APP_MODE                 (600)
-#define TOUT_NOTIF_MODE               (30)
-#define TOUT_MUSIC_MODE               (600)
-#define TOUT_CALL_NOTIF               (10)
-#define TOUT_CONN_HFP_MAP_LONG        (10)
-#define TOUT_CONN_HFP_MAP_SHORT       (1)
-#define TOUT_DISCONNECT               (10)
-#define TOUT_TUNNEL_CONNECTING        (5)
-#define TOUT_INTERVAL_LONG            (40) //60
-#define TOUT_HEARTBEAT                (1) 
 
 /* these should match the display modes for idle, application, notification,
  * and scroll modes
@@ -406,39 +369,14 @@ typedef enum
 /* configure mode option */
 #define SAVE_MODE_CONFIGURATION_MASK ( BIT4 )
 
-
-/*! The serial ram message is formatted so that it can be overlaid onto the
- * message from the host (so that a buffer allocation does not have to be
- * performed and there is one less message copy).
- *
- * \param Reserved0
- * \param Reserved1
- * \param SerialRamCommand is the command for the serial ram (read/write)
- * \param AddressMsb
- * \param AddressLsb
- * \param pLineA[BYTES_PER_LINE] is pixel data (and AddressMsb2 for second write)
- * \param AddressLsb2
- * \param pLineB[BYTES_PER_LINE]
- * \param Reserved31
- *
- */
-typedef struct
-{
-  unsigned char RowSelectA;
-  unsigned char pLineA[BYTES_PER_LINE];
-  unsigned char RowSelectB;
-  unsigned char pLineB[BYTES_PER_LINE];
-
-} tSerialRamPayload;
-
 #define LCD_MESSAGE_CMD_INDEX        ( 2 )
 #define LCD_MESSAGE_ROW_NUMBER_INDEX ( 3 )
 #define LCD_MESSAGE_LINE_INDEX       ( 4 )
 
-#define LED_OFF_OPTION      ( 0x00 )
-#define LED_ON_OPTION       ( 0x01 )
-#define LED_TOGGLE_OPTION   ( 0x02 )
-#define LED_START_OFF_TIMER ( 0x03 )
+#define LED_OFF                   0x00
+#define LED_ON                    0x01
+#define LED_TOGGLE                0x02
+#define LED_START_OFF_TIMER       0x03
 
 /******************************************************************************/
 
@@ -690,7 +628,6 @@ typedef struct
 #define MODIFY_TIME_INCREMENT_MINUTE ( 0x01 )
 #define MODIFY_TIME_INCREMENT_DOW    ( 0x02 )
 
-
 #define MENU_MODE_OPTION_PAGE1               ( 0x01 )
 #define MENU_MODE_OPTION_PAGE2               ( 0x02 )
 #define MENU_MODE_OPTION_PAGE3               ( 0x03 )
@@ -720,9 +657,6 @@ typedef struct
 #define PAIRING_CONTROL_OPTION_TOGGLE_SSP      ( 0x03 )
 #define PAIRING_CONTROL_OPTION_SAVE_SPP        ( 0x04 )
 
-#define NORMAL_SOFTWARE_RESET_OPTION ( 0x00 )
-#define MASTER_RESET_OPTION          ( 0x01 )
-
 #define TOGGLE_SECONDS_OPTIONS_UPDATE_IDLE      ( 0x01 )
 #define TOGGLE_SECONDS_OPTIONS_DONT_UPDATE_IDLE ( 0x02 )
 
@@ -734,13 +668,11 @@ typedef struct
 
 /******************************************************************************/
 
-
 #define SCROLL_OPTION_LAST_PACKET ( BIT0 )
 #define SCROLL_OPTION_START       ( BIT1 )
 
 #define SCROLL_OPTION_LAST_PACKET_MASK ( BIT0 )
 #define SCROLL_OPTION_START_MASK       ( BIT1 )
-
 
 /******************************************************************************/
 
@@ -759,7 +691,6 @@ typedef union
 } tWordByteUnion;
 
 /******************************************************************************/
-
 
 #define OLED_CROWN_MENU_MODE_OPTION_ENTER               ( 0 )
 #define OLED_CROWN_MENU_MODE_OPTION_NEXT_MENU           ( 1 )
@@ -808,6 +739,31 @@ typedef struct
 #define MSG_OPT_SHOW_SECOND       ( 2 )
 #define MSG_OPT_NORMAL_DISPLAY    ( 3 )
 #define MSG_OPT_INVERT_DISPLAY    ( 4 )
+
+
 /******************************************************************************/
+#define DISPLAY_QINDEX          0
+#define WRAPPER_QINDEX          1
+#define FREE_QINDEX             2
+
+#define DISPLAY_QUEUE_LENGTH   128 //16
+#define WRAPPER_QUEUE_LENGTH   32 //20, 16
+
+unsigned char *CreateMessage(tMessage *pMsg);
+void FreeMessageBuffer(unsigned char *pBuffer);
+
+void SendMessage(unsigned char Type, unsigned char Options);
+
+/*! Send a message to a queue from an ISR. This requires 1/2 the time of
+ * RouteMsgFromIsr. */
+void SendMessageIsr(unsigned char Type, unsigned char Options);
+
+/*! Route a message to the appropriate task (queue). This operation is a copy.
+ * \param pMsg A pointer to a message buffer
+ */
+void RouteMsg(tMessage *pMsg);
+
+/*! Print the message type */
+void ShowMessageInfo(tMessage *pMsg);
 
 #endif  /* MESSAGES_H */

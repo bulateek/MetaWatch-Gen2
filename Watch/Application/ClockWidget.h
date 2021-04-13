@@ -16,8 +16,10 @@
 
 #ifndef CLOCK_WIDGET_H
 #define CLOCK_WIDGET_H
-
+  
 void DrawClockWidget(unsigned char Id);
+
+void DrawHanziClock(Draw_t *Info);
 
 #endif // CLOCK_WIDGET_H
 

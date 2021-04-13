@@ -15,11 +15,11 @@
 //==============================================================================
 
 #include "FreeRTOS.h"
+#include "semphr.h"
 #include "hal_board_type.h"
 #include "hal_battery.h"
 #include "hal_miscellaneous.h"
 #include "hal_boot.h"
-#include "hal_lcd.h"
 #include "hal_lpm.h"
 #include "hal_rtc.h"
 #include "DebugUart.h"
@@ -32,17 +32,25 @@
 #include "MuxMode.h"
 #include "BitmapData.h"
 #include "Property.h"
+#include "hal_vibe.h"
+#include "Messages.h"
+#include "OneSecondTimers.h"
+#include "MessageInfo.h"
+#include "Wrapper.h"
+#include "DrawHandler.h"
 #include "LcdBuffer.h"
 
-#if COUNTDOWN_TIMER
-#include "Countdown.h"
+#if WWZ
+#include "Wwz.h"
 #endif
 
-#define SPLASH_START_ROW   (41)
+#define SPLASH_START_ROW              41
 
 /* the internal buffer */
-#define STARTING_ROW                  ( 0 )
-#define PHONE_DRAW_SCREEN_ROW_NUM     ( 66 )
+#define PHONE_DRAW_SCREEN_ROW_NUM     66
+
+#define FTM_START_ROW                 54
+#define FTM_ROW_NUM                   24
 
 /*
  * days of week are 0-6 and months are 1-12
@@ -64,11 +72,6 @@ const char MonthsOfYear[][13][7] =
    "Jul","Aug","Sep","Okt","Nov","Dez"}
 };
 
-//#if __IAR_SYSTEMS_ICC__
-//__no_init __root unsigned char niLang @ RTC_LANG_ADDR;
-//#else
-//extern unsigned char niLang;
-//#endif
 unsigned char const niLang = CURRENT_LANG;
 
 extern const char BUILD[];
@@ -81,13 +84,20 @@ extern const char VERSION[];
 extern const char BootVersion[VERSION_LEN];
 #endif
 
-static tLcdLine pMyBuffer[LCD_ROW_NUM];
+#define COPY      0
+#define CLEAR     1
+#define SET       2
+
+//static tLcdLine LcdBuf[LCD_ROW_NUM];
+static tLcdLine *LcdBuf; // = LcdBuf;
+
 #define LCD_BUFFER_SIZE (sizeof(tLcdLine) * LCD_ROW_NUM)
 
 static unsigned char gBitColumnMask;
 static unsigned char gColumn;
 static unsigned char gRow;
 
+//static void FillLcdBuffer(unsigned char StartRow, unsigned char RowNum, unsigned char Value);
 static void CopyColumnsIntoMyBuffer(unsigned char const *pImage, unsigned char StartRow,
                                     unsigned char RowNum, unsigned char StartCol, unsigned char ColNum);
 
@@ -96,20 +106,22 @@ static void DrawMenu2(void);
 static void DrawMenu3(void);
 static void DrawCommonMenuIcons(void);
 
-static void DrawHours(unsigned char Op);
-static void DrawMins(unsigned char Op);
-static void DrawSecs(void);
-static void DrawChar(char const Char, unsigned char Op);
-static void DrawString(char const *pString, unsigned char Op);
-static void DrawLocalAddress(unsigned char Col, unsigned Row);
+static void GetHour(char *Hour);
+static void GetMinute(char *Min);
+static void GetSecond(char *Sec);
+static void DrawChar(char const Char, etFontType Font, unsigned char Op);
+static void DrawString(char const *pString, etFontType Font, unsigned char Op);
+static void DrawLocalAddress(void);
 static void DrawBatteryOnIdleScreen(unsigned char Row, unsigned char Col, etFontType Font);
+//static void WriteToBuffer(unsigned char const *pData, unsigned char StartRow, unsigned char RowNum,
+//                          unsigned char StartCol, unsigned char ColNum, unsigned char Op);
 
 /******************************************************************************/
 
-void DrawMenu(eIdleModePage Page)
+void DrawMenu(unsigned char Page)
 {
   /* clear entire region */
-  FillMyBuffer(STARTING_ROW, LCD_ROW_NUM, 0x00);
+  FillLcdBuffer(STARTING_ROW, LCD_ROW_NUM, LCD_WHITE);
 
   switch (Page)
   {
@@ -121,151 +133,208 @@ void DrawMenu(eIdleModePage Page)
 
   /* these icons are common to all menus */
   DrawCommonMenuIcons();
-  SendMyBufferToLcd(STARTING_ROW, LCD_ROW_NUM);
+  WriteBufferToLcd(STARTING_ROW, LCD_ROW_NUM);
 }
 
 static void DrawMenu1(void)
 {
-  const unsigned char *pIcon;
+  unsigned char i = 0;
 
-  if (BluetoothState() == Initializing)
-  {
-    pIcon = pBluetoothInitIcon;
-  }
-  else
-  {
-    pIcon = RadioOn() ? pBluetoothOnIcon : pBluetoothOffIcon;
-  }
+  if (BluetoothState() == Initial) i = MENU_ITEM_RADIO_INIT;
+  else i = RadioOn() ? MENU_ITEM_RADIO_ON : MENU_ITEM_RADIO_OFF;
 
-  CopyColumnsIntoMyBuffer(pIcon,
+  CopyColumnsIntoMyBuffer(pIconMenuItem[i],
                           BUTTON_ICON_A_F_ROW,
-                          BUTTON_ICON_SIZE_IN_ROWS,
+                          BUTTON_ICON_ROWS,
                           RIGHT_BUTTON_COLUMN,
-                          BUTTON_ICON_SIZE_IN_COLUMNS);
+                          BUTTON_ICON_COLS);
 
-  CopyColumnsIntoMyBuffer(pInvertDisplayIcon,
+  CopyColumnsIntoMyBuffer(pIconMenuItem[MENU_ITEM_INVERT],
                           BUTTON_ICON_B_E_ROW,
-                          BUTTON_ICON_SIZE_IN_ROWS,
+                          BUTTON_ICON_ROWS,
                           LEFT_BUTTON_COLUMN,
-                          BUTTON_ICON_SIZE_IN_COLUMNS);
+                          BUTTON_ICON_COLS);
 
-  CopyColumnsIntoMyBuffer(GetProperty(PROP_TIME_SECOND) ? pSecondsOnMenuIcon : pSecondsOffMenuIcon,
+  CopyColumnsIntoMyBuffer(pIconMenuItem[GetProperty(PROP_TIME_SECOND) ? MENU_ITEM_SECOND_ON : MENU_ITEM_SECOND_OFF],
                           BUTTON_ICON_B_E_ROW,
-                          BUTTON_ICON_SIZE_IN_ROWS,
+                          BUTTON_ICON_ROWS,
                           RIGHT_BUTTON_COLUMN,
-                          BUTTON_ICON_SIZE_IN_COLUMNS);
+                          BUTTON_ICON_COLS);
 
-  CopyColumnsIntoMyBuffer(LinkAlarmEnabled() ? pLinkAlarmOnIcon : pLinkAlarmOffIcon,
+  CopyColumnsIntoMyBuffer(pIconMenuItem[MENU_ITEM_COUNTDOWN],
                           BUTTON_ICON_C_D_ROW,
-                          BUTTON_ICON_SIZE_IN_ROWS,
+                          BUTTON_ICON_ROWS,
                           LEFT_BUTTON_COLUMN,
-                          BUTTON_ICON_SIZE_IN_COLUMNS);
+                          BUTTON_ICON_COLS);
 }
 
 static void DrawMenu2(void)
 {
-  CopyColumnsIntoMyBuffer(RESET_PIN ? pNmiPinIcon : pRstPinIcon,
+  CopyColumnsIntoMyBuffer(pIconMenuItem[RESET_PIN ? MENU_ITEM_NMI : MENU_ITEM_RST],
                           BUTTON_ICON_A_F_ROW,
-                          BUTTON_ICON_SIZE_IN_ROWS,
+                          BUTTON_ICON_ROWS,
                           RIGHT_BUTTON_COLUMN,
-                          BUTTON_ICON_SIZE_IN_COLUMNS);
+                          BUTTON_ICON_COLS);
 
-  const unsigned char *pIcon;
   unsigned char MuxMode = GetMuxMode();
+  unsigned char i = 0;
 
-  if (MuxMode == MUX_MODE_SERIAL) pIcon = pSerialIcon;
-  else if (MuxMode == MUX_MODE_GND) pIcon = pGroundIcon;
-  else pIcon = pSbwIcon;
+  if (MuxMode == MUX_MODE_SERIAL) i = MENU_ITEM_SERIAL;
+  else if (MuxMode == MUX_MODE_GND) i = MENU_ITEM_GROUND;
+  else i = MENU_ITEM_SBW;
   
-  CopyColumnsIntoMyBuffer(pIcon,
+  CopyColumnsIntoMyBuffer(pIconMenuItem[i],
                           BUTTON_ICON_B_E_ROW,
-                          BUTTON_ICON_SIZE_IN_ROWS,
+                          BUTTON_ICON_ROWS,
                           LEFT_BUTTON_COLUMN,
-                          BUTTON_ICON_SIZE_IN_COLUMNS);
+                          BUTTON_ICON_COLS);
 
-  CopyColumnsIntoMyBuffer(pNextIcon,
+  CopyColumnsIntoMyBuffer(pIconMenuItem[MENU_ITEM_NEXT],
                           BUTTON_ICON_B_E_ROW,
-                          BUTTON_ICON_SIZE_IN_ROWS,
+                          BUTTON_ICON_ROWS,
                           RIGHT_BUTTON_COLUMN,
-                          BUTTON_ICON_SIZE_IN_COLUMNS);
+                          BUTTON_ICON_COLS);
 
-  CopyColumnsIntoMyBuffer(pResetButtonIcon,
+  CopyColumnsIntoMyBuffer(pIconMenuItem[MENU_ITEM_RESET],
                           BUTTON_ICON_C_D_ROW,
-                          BUTTON_ICON_SIZE_IN_ROWS,
+                          BUTTON_ICON_ROWS,
                           LEFT_BUTTON_COLUMN,
-                          BUTTON_ICON_SIZE_IN_COLUMNS);
+                          BUTTON_ICON_COLS);
 }
 
 static void DrawMenu3(void)
 {
-  CopyColumnsIntoMyBuffer(pBootloaderIcon,
+  CopyColumnsIntoMyBuffer(pIconMenuItem[MENU_ITEM_BOOTLOADER],
                           BUTTON_ICON_A_F_ROW,
-                          BUTTON_ICON_SIZE_IN_ROWS,
+                          BUTTON_ICON_ROWS,
                           RIGHT_BUTTON_COLUMN,
-                          BUTTON_ICON_SIZE_IN_COLUMNS);
+                          BUTTON_ICON_COLS);
 
-  CopyColumnsIntoMyBuffer(ChargeEnabled() ? pIconChargingEnabled : pIconChargingDisabled,
+  CopyColumnsIntoMyBuffer(pIconMenuItem[ChargeEnabled() ? MENU_ITEM_CHARGE_EN : MENU_ITEM_CHARGE_DISABLE],
                           BUTTON_ICON_B_E_ROW,
-                          BUTTON_ICON_SIZE_IN_ROWS,
+                          BUTTON_ICON_ROWS,
                           LEFT_BUTTON_COLUMN,
-                          BUTTON_ICON_SIZE_IN_COLUMNS);
+                          BUTTON_ICON_COLS);
 
-  CopyColumnsIntoMyBuffer(pNextIcon,
+  CopyColumnsIntoMyBuffer(pIconMenuItem[MENU_ITEM_NEXT],
                           BUTTON_ICON_B_E_ROW,
-                          BUTTON_ICON_SIZE_IN_ROWS,
+                          BUTTON_ICON_ROWS,
                           RIGHT_BUTTON_COLUMN,
-                          BUTTON_ICON_SIZE_IN_COLUMNS);
+                          BUTTON_ICON_COLS);
 
-  CopyColumnsIntoMyBuffer(pTestIcon,
+  CopyColumnsIntoMyBuffer(pIconMenuItem[MENU_ITEM_TEST],
                           BUTTON_ICON_C_D_ROW,
-                          BUTTON_ICON_SIZE_IN_ROWS,
+                          BUTTON_ICON_ROWS,
                           LEFT_BUTTON_COLUMN,
-                          BUTTON_ICON_SIZE_IN_COLUMNS);
+                          BUTTON_ICON_COLS);
 }
 
 static void DrawCommonMenuIcons(void)
 {
-  CopyColumnsIntoMyBuffer(pLedIcon,
+  CopyColumnsIntoMyBuffer(pIconMenuItem[MENU_ITEM_BACKLIGHT],
                           BUTTON_ICON_A_F_ROW,
-                          BUTTON_ICON_SIZE_IN_ROWS,
+                          BUTTON_ICON_ROWS,
                           LEFT_BUTTON_COLUMN,
-                          BUTTON_ICON_SIZE_IN_COLUMNS);
+                          BUTTON_ICON_COLS);
 
-  CopyColumnsIntoMyBuffer(pExitIcon,
+  CopyColumnsIntoMyBuffer(pIconMenuItem[MENU_ITEM_EXIT],
                           BUTTON_ICON_C_D_ROW,
-                          BUTTON_ICON_SIZE_IN_ROWS,
+                          BUTTON_ICON_ROWS,
                           RIGHT_BUTTON_COLUMN,
-                          BUTTON_ICON_SIZE_IN_COLUMNS);
+                          BUTTON_ICON_COLS);
 }
 
 void DrawConnectionScreen(void)
 {
-  const unsigned char *pSwash;
+  FillLcdBuffer(WATCH_DRAW_SCREEN_ROW_NUM, PHONE_DRAW_SCREEN_ROW_NUM, LCD_WHITE);
 
-  if (!RadioOn()) pSwash = pBootPageBluetoothOffSwash;
-  else if (ValidAuthInfo()) pSwash = pBootPagePairedSwash;
-  else pSwash = pBootPageNoPairSwash;
-  
-  FillMyBuffer(WATCH_DRAW_SCREEN_ROW_NUM, PHONE_DRAW_SCREEN_ROW_NUM, 0x00);
-  CopyRowsIntoMyBuffer(pSwash, WATCH_DRAW_SCREEN_ROW_NUM + 1, 32);
+  if (!RadioOn())
+  {
+    gRow = WATCH_DRAW_SCREEN_ROW_NUM + 9;
+    gColumn = 4;
+    gBitColumnMask = BIT0;
+    DrawString("Bluetooth", MetaWatch16, DRAW_OPT_OR);
+
+    gRow += 16;
+    gColumn = 4;
+    gBitColumnMask = BIT0;
+    DrawString("OFF", MetaWatch16, DRAW_OPT_OR);
+
+    CopyColumnsIntoMyBuffer(IconInfo[ICON_RADIO_OFF].Data,
+      WATCH_DRAW_SCREEN_ROW_NUM + 9, IconInfo[ICON_RADIO_OFF].Height,
+      0, IconInfo[ICON_RADIO_OFF].Width);
+  }
+  else if (BlePaired() || BtPaired() || Connected(CONN_TYPE_ANCS))
+  {
+    gRow = WATCH_DRAW_SCREEN_ROW_NUM + 5;
+    gColumn = 1;
+    gBitColumnMask = BIT2;
+    DrawString("Start", MetaWatch7, DRAW_OPT_OR);
+
+    gRow += 8;
+    gColumn = 1;
+    gBitColumnMask = BIT2;
+    DrawString("MWM", MetaWatch7, DRAW_OPT_OR);
+
+    gRow += 8;
+    gColumn = 1;
+    gBitColumnMask = BIT2;
+    DrawString("Phone", MetaWatch7, DRAW_OPT_OR);
+
+    gRow += 8;
+    gColumn = 1;
+    gBitColumnMask = BIT2;
+    DrawString("App", MetaWatch7, DRAW_OPT_OR);
+
+    CopyColumnsIntoMyBuffer(IconInfo[ICON_START_MWM].Data,
+      WATCH_DRAW_SCREEN_ROW_NUM + 9, IconInfo[ICON_START_MWM].Height,
+      6, IconInfo[ICON_START_MWM].Width);
+  }
+  else
+  {
+    FillLcdBuffer(WATCH_DRAW_SCREEN_ROW_NUM, 11, LCD_BLACK);
+    gRow = WATCH_DRAW_SCREEN_ROW_NUM + 2;
+    gColumn = 1;
+    gBitColumnMask = BIT2;
+    DrawString(GetLocalName(), MetaWatch7, DRAW_OPT_NOT);
+
+    gRow += 12;
+    gColumn = 4;
+    gBitColumnMask = BIT0;
+    DrawString("Ready To", MetaWatch7, DRAW_OPT_OR);
+
+    gRow += 8;
+    gColumn = 4;
+    gBitColumnMask = BIT0;
+    DrawString("Pair With", MetaWatch7, DRAW_OPT_OR);
+
+    gRow += 8;
+    gColumn = 4;
+    gBitColumnMask = BIT0;
+    DrawString("Phone", MetaWatch7, DRAW_OPT_OR);
+
+    CopyColumnsIntoMyBuffer(IconInfo[ICON_PHONE].Data,
+      WATCH_DRAW_SCREEN_ROW_NUM + 14, IconInfo[ICON_PHONE].Height,
+      1, IconInfo[ICON_PHONE].Width);
+  }
 
   /* add the firmware version */
-  gRow = 68;
+  gRow = 73;
   gColumn = 4;
   gBitColumnMask = BIT0;
-  SetFont(MetaWatch5);
-  DrawString("V ", DRAW_OPT_BITWISE_OR);
-  DrawString((char *)VERSION, DRAW_OPT_BITWISE_OR);
+  DrawString("V ", MetaWatch5, DRAW_OPT_OR);
+  DrawString((char *)VERSION, MetaWatch5, DRAW_OPT_OR);
 
-  DrawLocalAddress(1, 80);
+  DrawLocalAddress();
   
-  SendMyBufferToLcd(WATCH_DRAW_SCREEN_ROW_NUM, PHONE_DRAW_SCREEN_ROW_NUM);
+  WriteBufferToLcd(WATCH_DRAW_SCREEN_ROW_NUM, PHONE_DRAW_SCREEN_ROW_NUM);
 }
 
-void DrawWatchStatusScreen(void)
+void DrawWatchStatusScreen(unsigned char Full)
 {
-  FillMyBuffer(0, LCD_ROW_NUM, 0);
-  CopyColumnsIntoMyBuffer(RadioOn() ? pRadioOnIcon : pRadioOffIcon,
+  FillLcdBuffer(STARTING_ROW, FTM_START_ROW - NUMBER_OF_ROWS_IN_WAVY_LINE, LCD_WHITE);
+
+  CopyColumnsIntoMyBuffer(RadioOn() ? pRadioOnIcon : pIconRadioOff,
                           3,
                           STATUS_ICON_SIZE_IN_ROWS,
                           LEFT_STATUS_ICON_COLUMN,
@@ -280,189 +349,280 @@ void DrawWatchStatusScreen(void)
   gRow = 31;
   gColumn = 5;
   gBitColumnMask = BIT4;
-  SetFont(MetaWatch5);
 
-//  if (PairedDeviceType() == DEVICE_TYPE_BLE)
-//  {
-//    if (Connected(CONN_TYPE_HFP) && Connected(CONN_TYPE_MAP)) DrawString("DUO", DRAW_OPT_BITWISE_OR);
-//    else DrawString("BLE", DRAW_OPT_BITWISE_OR);
-//  }
-//  else if (PairedDeviceType() == DEVICE_TYPE_SPP) DrawString("BR", DRAW_OPT_BITWISE_OR);
-
-  if (PairedDeviceType() == DEVICE_TYPE_SPP)
+  if (BtPaired())
   {
     DrawString(Connected(CONN_TYPE_SPP) && QuerySniffState() == Active ? "ACT" : "BR",
-      DRAW_OPT_BITWISE_OR);
+      MetaWatch5, DRAW_OPT_OR);
   }
 #if SUPPORT_BLE
-  else if (PairedDeviceType() == DEVICE_TYPE_BLE)
+  else if (BlePaired())
   {
     DrawString(Connected(CONN_TYPE_BLE) && CurrentInterval(INTERVAL_STATE) == SHORT ? "ACT" :
       (Connected(CONN_TYPE_HFP) && Connected(CONN_TYPE_MAP) ? "DUO" : "BLE"),
-      DRAW_OPT_BITWISE_OR);
+      MetaWatch5, DRAW_OPT_OR);
   }
 #endif
 
   DrawBatteryOnIdleScreen(6, 9, MetaWatch7);
+  WriteBufferToLcd(STARTING_ROW, 31 + 5);
 
-  // Add Wavy line
-  gRow += 12;
-  CopyRowsIntoMyBuffer(pWavyLine, gRow, NUMBER_OF_ROWS_IN_WAVY_LINE);
-  CopyColumnsIntoMyBuffer(pIconWatch, 54, 21, 0, 2); //54, 21, 2, 2);
+  if (Full)
+  {
+    FillLcdBuffer(31 + 5, 60, LCD_WHITE);
 
-  /* add the firmware version */
-  gColumn = 2;
-  gRow = 56;
-  gBitColumnMask = BIT2;
-  DrawString("SW: ", DRAW_OPT_BITWISE_OR);
-  DrawString((char *)VERSION, DRAW_OPT_BITWISE_OR);
-  DrawString(" (", DRAW_OPT_BITWISE_OR);
-  DrawChar(BUILD[0], DRAW_OPT_BITWISE_OR);
-  DrawChar(BUILD[1], DRAW_OPT_BITWISE_OR);
-  DrawChar(BUILD[2], DRAW_OPT_BITWISE_OR);
-  DrawChar(')', DRAW_OPT_BITWISE_OR);
-  
-  gColumn = 2;
-  gRow = 65;
-  gBitColumnMask = BIT2;
-  DrawString("HW: REV ", DRAW_OPT_BITWISE_OR);
-  DrawChar(GetMsp430HardwareRevision(), DRAW_OPT_BITWISE_OR);
+    // Add Wavy line
+//    gRow += 12;
+    CopyRowsIntoMyBuffer(pWavyLine, 31 + 10, NUMBER_OF_ROWS_IN_WAVY_LINE);
 
-  DrawLocalAddress(1, 80);
-  
-  SendMyBufferToLcd(STARTING_ROW, LCD_ROW_NUM);
+    CopyColumnsIntoMyBuffer(pIconWatch, FTM_START_ROW, 21, 0, 2);
+
+    /* add the firmware version */
+    gColumn = 2;
+    gRow = FTM_START_ROW + 2;
+    gBitColumnMask = BIT2;
+    DrawString("SW: ", MetaWatch7, DRAW_OPT_OR);
+    DrawString((char *)VERSION, MetaWatch7, DRAW_OPT_OR);
+    DrawString(" (", MetaWatch7, DRAW_OPT_OR);
+    DrawString(BUILD, MetaWatch7, DRAW_OPT_OR);
+    DrawChar(')', MetaWatch7, DRAW_OPT_OR);
+    
+    gColumn = 2;
+    gRow = 65;
+    gBitColumnMask = BIT2;
+    DrawString("HW: REV ", MetaWatch7, DRAW_OPT_OR);
+    DrawChar(GetMsp430HardwareRevision(), MetaWatch7, DRAW_OPT_OR);
+
+    DrawLocalAddress();
+    WriteBufferToLcd(31 + 5, 60);
+  }
 }
 
-static void DrawLocalAddress(unsigned char Col, unsigned Row)
+#define FTM_IDLE      0
+#define FTM_VIBRA_A   1
+#define FTM_VIBRA_B   2
+#define FTM_EXIT      3
+static unsigned char State = FTM_EXIT;
+
+void HandleFieldTestMode(unsigned char const Option)
+{
+  static unsigned char Vibrate = FALSE;
+  static unsigned long Counter = 0;
+
+  switch (Option)
+  {
+  case FIELD_TEST_ENTER:
+
+    State = FTM_IDLE;
+    Counter = 0;
+    break;
+
+  case FIELD_TEST_TIMEOUT:
+
+    if (State == FTM_VIBRA_B)
+    {
+      Vibrate = !Vibrate;
+      SetVibeMotorState(Vibrate);
+    }
+
+    Counter ++;
+    break;
+
+  case FIELD_TEST_BUTTON_B:
+
+    if (State == FTM_EXIT) return;
+
+    State = FTM_VIBRA_B;
+    StartTimer(FieldTestTimer);
+    SetVibeMotorState(TRUE);
+    Counter = 0;
+    break;
+
+  case FIELD_TEST_BUTTON_C:
+
+    if (State == FTM_EXIT) return;
+
+    State = FTM_IDLE;
+    StopTimer(FieldTestTimer);
+    Vibrate = FALSE;
+    SetVibeMotorState(Vibrate);
+    return;
+
+  case FIELD_TEST_BUTTON_A:
+
+    if (State != FTM_EXIT)
+    {
+      State = FTM_VIBRA_A;
+      StartTimer(FieldTestTimer);
+      SetVibeMotorState(TRUE);
+      Counter = 0;
+      break;
+    }
+
+  case FIELD_TEST_EXIT:
+
+    State = FTM_EXIT;
+    StopTimer(FieldTestTimer);
+    SendMessage(IdleUpdateMsg, MSG_OPT_NONE);
+    return;
+
+  default: break;
+  }
+
+  // Draw counter
+  char Elapse[10];
+  char *pChar;
+  unsigned long Hms;
+
+  gRow = FTM_START_ROW;
+  gColumn = 0;
+  gBitColumnMask = BIT7;
+  pChar = Elapse;
+
+  Hms = Counter / 3600;
+  Hms %= 1000;
+
+  if (Hms > 99)
+  {
+    gBitColumnMask = BIT1; //maxwith + 1
+    *pChar++ = Hms / 100 + ZERO;
+    Hms %= 100;
+  }
+  *pChar++ = Hms / 10 + ZERO;
+  *pChar++ = Hms % 10 + ZERO;
+  *pChar++ = COLON;
+
+  Hms = Counter % 3600 / 60;
+  *pChar++ = Hms / 10 + ZERO;
+  *pChar++ = Hms % 10 + ZERO;
+  *pChar++ = COLON;
+
+  Hms = Counter % 60;
+  *pChar++ = Hms / 10 + ZERO;
+  *pChar++ = Hms % 10 + ZERO;
+  *pChar = 0;
+
+  FillLcdBuffer(FTM_START_ROW, FTM_ROW_NUM, LCD_WHITE);
+  DrawString(Elapse, Time, DRAW_OPT_OR);
+  WriteBufferToLcd(FTM_START_ROW, FTM_ROW_NUM);
+}
+
+static void DrawLocalAddress(void)
 {
   char pAddr[12 + 3]; // BT_ADDR is 6 bytes long
   GetBDAddrStr(pAddr);
 
-  gRow = Row;
-  gColumn = Col;
+  gRow = 82;
+  gColumn = 1;
   gBitColumnMask = BIT2;
-  SetFont(MetaWatch7);
-  
-  unsigned char i;
-  for (i = 2; i < 14; ++i)
-  {
-    DrawChar(pAddr[i], DRAW_OPT_BITWISE_OR);
-    if ((i & 0x03) == 1 && i != 13) DrawChar('-', DRAW_OPT_BITWISE_OR);
-  }
-}
 
-void DrawCallScreen(char *pCallerId, char *pCallerName)
-{
-  FillMyBuffer(STARTING_ROW, LCD_ROW_NUM, 0x00);
-  CopyRowsIntoMyBuffer(pCallNotif, CALL_NOTIF_START_ROW, CALL_NOTIF_ROWS);
-
-  SetFont(MetaWatch16);
-  gRow = 5;
-  gColumn = 0;
-  gBitColumnMask = BIT6;
-  DrawString("Call from:", DRAW_OPT_BITWISE_OR);
-
-  SetFont(MetaWatch7);
-  gRow = 58;
-  gColumn = 0;
-  gBitColumnMask = BIT6;
-  DrawString(pCallerId, DRAW_OPT_BITWISE_OR);
-
-  SetFont(MetaWatch16);
-  gRow = 24;
-  gColumn = 0;
-  gBitColumnMask = BIT6;
-
-  unsigned char i = 0;
-  while (pCallerName[i] != NULL && pCallerName[i] != SPACE) i ++;
-  if (pCallerName[i] == SPACE) pCallerName[i] = NULL;
-  else i = 0;
-
-  DrawString(pCallerName, DRAW_OPT_BITWISE_OR);
-
-  if (i)
-  {
-    gRow = 40;
-    gColumn = 0;
-    gBitColumnMask = BIT6;
-    DrawString(&pCallerName[i + 1], DRAW_OPT_BITWISE_OR);
-  }
-
-  // write timestamp
-  SetFont(MetaWatch5);
-  gRow = 86;
-  gColumn = 7;
-  gBitColumnMask = BIT6;
-  DrawHours(DRAW_OPT_BITWISE_NOT);
-  DrawMins(DRAW_OPT_BITWISE_NOT);
-  if (!GetProperty(PROP_24H_TIME_FORMAT)) DrawString((RTCHOUR > 11) ? "PM" : "AM", DRAW_OPT_BITWISE_NOT);
-
-  SendMyBufferToLcd(STARTING_ROW, LCD_ROW_NUM);    
+  DrawString(pAddr, MetaWatch7, DRAW_OPT_OR);
+//  unsigned char i;
+//  for (i = 2; i < 14; ++i)
+//  {
+//    DrawChar(pAddr[i], MetaWatch7, DRAW_OPT_OR);
+//    if ((i & 0x03) == 1 && i != 13) DrawChar('-', MetaWatch7, DRAW_OPT_OR);
+//  }
 }
 
 static void DrawBatteryOnIdleScreen(unsigned char Row, unsigned char Col, etFontType Font)
 {
-  // Battery
-  CopyColumnsIntoMyBuffer(GetBatteryIcon(ICON_SET_BATTERY_V), Row,
-    IconInfo[ICON_SET_BATTERY_V].Height, Col, IconInfo[ICON_SET_BATTERY_V].Width);
+  unsigned char BattVal = BatteryPercentage();
+  unsigned char i = (BattVal == BATTERY_UNKNOWN) ? ICON_BATTERY_UNKNOWN : ICON_SET_BATTERY_V;
+  CopyColumnsIntoMyBuffer(GetIcon(i), Row, IconInfo[i].Height, Col, IconInfo[i].Width);
 
-  SetFont(Font);
   gRow = Row + (Font == MetaWatch7 ? 23 : 21); //29
   gColumn = Col - 1; //8
-  gBitColumnMask = (Font == MetaWatch7) ? BIT4 : BIT7;
+  gBitColumnMask = (Font == MetaWatch7) ? BIT4 : BIT5;
 
-  unsigned char BattVal = BatteryPercentage();
-  
-  if (BattVal < 100)
+  if (BattVal != BATTERY_UNKNOWN)
   {
-    BattVal = ToBCD(BattVal);
-    DrawChar(BattVal > 9 ? BCD_H(BattVal) +ZERO : SPACE, DRAW_OPT_BITWISE_OR);
-    DrawChar(BCD_L(BattVal) +ZERO, DRAW_OPT_BITWISE_OR);
-  }
-  else DrawString("100", DRAW_OPT_BITWISE_OR);
+    if (BattVal < 100)
+    {
+      BattVal = ToBCD(BattVal);
+      DrawChar(BattVal > 9 ? BCD_H(BattVal) + ZERO : SPACE, Font, DRAW_OPT_OR);
+      DrawChar(BCD_L(BattVal) + ZERO, Font, DRAW_OPT_OR);
+    }
+    else DrawString("100", Font, DRAW_OPT_OR);
 
-  DrawChar('%', DRAW_OPT_BITWISE_OR);
+    DrawChar('%', Font, DRAW_OPT_OR);
+  }
+  else DrawString("Wait", MetaWatch5, DRAW_OPT_OR);
 }
 
-const unsigned char *GetBatteryIcon(unsigned char Id)
+unsigned char const *GetIcon(unsigned char Id)
 {
-  unsigned int Level = Read(BATTERY);
   unsigned char Index = 0;
+  unsigned char Percent;
+  unsigned char const *pIcon = IconInfo[Id].Data;
 
-  if (Level >= BATTERY_FULL_LEVEL) Index = BATTERY_LEVEL_NUMBER;
-  else if (Level <= BatteryCriticalLevel(CRITICAL_WARNING) && !Charging()) Index = 1; // warning icon index
-  else
+  switch (Id)
   {
-    unsigned int Empty = BatteryCriticalLevel(CRITICAL_BT_OFF);
-    unsigned int Step = (BATTERY_FULL_LEVEL - Empty) / BATTERY_LEVEL_NUMBER;
-    
-    while (Level > (Empty + Step * Index)) Index ++;
-  }
-  
-  const unsigned char *pIcon = IconInfo[Id].pIconSet + (Index * IconInfo[Id].Width * IconInfo[Id].Height);
-  if (!Charging()) pIcon += BATTERY_ICON_NUM * IconInfo[Id].Width * IconInfo[Id].Height;
+  case ICON_SET_BLUETOOTH_BIG:
+  case ICON_SET_BLUETOOTH_SMALL:
 
+    if (!RadioOn()) Index = ICON_BLUETOOTH_OFF;
+    else if (Connected(CONN_TYPE_MAIN)) Index = ICON_BLUETOOTH_CONN;
+    else if (OnceConnected()) Index = ICON_BLUETOOTH_DISC;
+    else Index = ICON_BLUETOOTH_ON;
+    break;
+
+  case ICON_SET_BATTERY_H:
+  case ICON_SET_BATTERY_V:
+
+    Percent = BatteryPercentage();
+
+    if (Percent == 100) Index = BATTERY_LEVEL_NUMBER;
+    else if (Percent <= WARNING_LEVEL && !Charging()) Index = 1; // warning icon index
+    else
+    {
+      while (Percent > BATTERY_LEVEL_INTERVAL)
+      {
+        Index ++;
+        Percent -= BATTERY_LEVEL_INTERVAL;
+      }
+    }
+
+    if (!Charging()) pIcon += BATTERY_ICON_NUM * IconInfo[Id].Width * IconInfo[Id].Height;
+    break;
+
+  default: break;
+  }
+
+  pIcon += Index * IconInfo[Id].Width * IconInfo[Id].Height;
   return pIcon;
 }
 
 void DrawDateTime(void)
 {
   // clean date&time area
-  FillMyBuffer(STARTING_ROW, WATCH_DRAW_SCREEN_ROW_NUM, 0x00);
+  FillLcdBuffer(STARTING_ROW, WATCH_DRAW_SCREEN_ROW_NUM, LCD_WHITE);
 
-  SetFont(DEFAULT_HOURS_FONT);  
   gRow = DEFAULT_HOURS_ROW;
   gColumn = DEFAULT_HOURS_COL;
   gBitColumnMask = DEFAULT_HOURS_COL_BIT;
-  DrawHours(DRAW_OPT_BITWISE_OR);
+  char Hms[4];
+  GetHour(Hms);
+  DrawString(Hms, DEFAULT_HOURS_FONT, DRAW_OPT_OR);
 
   gRow = DEFAULT_MINS_ROW;
   gColumn = DEFAULT_MINS_COL;
   gBitColumnMask = DEFAULT_MINS_COL_BIT;
-  DrawMins(DRAW_OPT_BITWISE_OR);
-  
-  if (GetProperty(PROP_TIME_SECOND)) DrawSecs();
-  else if (Charging()) DrawBatteryOnIdleScreen(3, 9, MetaWatch5);
+  GetMinute(Hms);
+  DrawString(Hms, DEFAULT_HOURS_FONT, DRAW_OPT_OR);
+
+  if (GetProperty(PROP_TIME_SECOND))
+  {
+    gRow = DEFAULT_SECS_ROW;
+    gColumn = DEFAULT_SECS_COL;
+    gBitColumnMask = DEFAULT_SECS_COL_BIT;
+    GetSecond(Hms);
+    DrawString(Hms, DEFAULT_SECS_FONT, DRAW_OPT_OR);
+  }
+  else if (Charging() || BatteryPercentage() <= WARNING_LEVEL)
+  {
+    DrawBatteryOnIdleScreen(3, 9, MetaWatch5);
+  }
   else
   {
     if (!GetProperty(PROP_24H_TIME_FORMAT))
@@ -470,16 +630,14 @@ void DrawDateTime(void)
       gRow = DEFAULT_AM_PM_ROW;
       gColumn = DEFAULT_AM_PM_COL;
       gBitColumnMask = DEFAULT_AM_PM_COL_BIT;
-      SetFont(DEFAULT_AM_PM_FONT);
-      DrawString((RTCHOUR > 11) ? "PM" : "AM", DRAW_OPT_BITWISE_OR);
+      DrawString((RTCHOUR > 0x11) ? "PM" : "AM", DEFAULT_AM_PM_FONT, DRAW_OPT_OR);
     }
 
     gRow = GetProperty(PROP_24H_TIME_FORMAT) ? DEFAULT_DOW_24HR_ROW : DEFAULT_DOW_12HR_ROW;
     gColumn = DEFAULT_DOW_COL;
     gBitColumnMask = DEFAULT_DOW_COL_BIT;
-    SetFont(DEFAULT_DOW_FONT);
 
-    DrawString((tString *)DaysOfTheWeek[niLang][RTCDOW], DRAW_OPT_BITWISE_OR);
+    DrawString((tString *)DaysOfTheWeek[niLang][RTCDOW], DEFAULT_DOW_FONT, DRAW_OPT_OR);
 
     //add year when time is in 24 hour mode
     if (GetProperty(PROP_24H_TIME_FORMAT))
@@ -487,140 +645,255 @@ void DrawDateTime(void)
       gRow = DEFAULT_DATE_YEAR_ROW;
       gColumn = DEFAULT_DATE_YEAR_COL;
       gBitColumnMask = DEFAULT_DATE_YEAR_COL_BIT;
-      SetFont(DEFAULT_DATE_YEAR_FONT);
 
       unsigned char Year = RTCYEARH;
-      DrawChar(BCD_H(Year) + ZERO, DRAW_OPT_BITWISE_OR);
-      DrawChar(BCD_L(Year) + ZERO, DRAW_OPT_BITWISE_OR);
+      DrawChar(BCD_H(Year) + ZERO, DEFAULT_DATE_YEAR_FONT, DRAW_OPT_OR);
+      DrawChar(BCD_L(Year) + ZERO, DEFAULT_DATE_YEAR_FONT, DRAW_OPT_OR);
       Year = RTCYEARL;
-      DrawChar(BCD_H(Year) + ZERO, DRAW_OPT_BITWISE_OR);
-      DrawChar(BCD_L(Year) + ZERO, DRAW_OPT_BITWISE_OR);
+      DrawChar(BCD_H(Year) + ZERO, DEFAULT_DATE_YEAR_FONT, DRAW_OPT_OR);
+      DrawChar(BCD_L(Year) + ZERO, DEFAULT_DATE_YEAR_FONT, DRAW_OPT_OR);
     }
 
-    //Display month and day
-    //Watch controls time - use default date position
-    unsigned char DayFirst = GetProperty(PROP_DDMM_DATE_FORMAT);
-    char Rtc[2];
-    Rtc[DayFirst ? 0 : 1] = RTCDAY;
-    Rtc[DayFirst ? 1 : 0] = RTCMON;
+    if (BlePaired() || BtPaired())
+    {
+      //Display month and day
+      //Watch controls time - use default date position
+      unsigned char DayFirst = GetProperty(PROP_DDMM_DATE_FORMAT);
+      char Rtc[2];
+      Rtc[DayFirst ? 0 : 1] = RTCDAY;
+      Rtc[DayFirst ? 1 : 0] = RTCMON;
 
-    gRow = DEFAULT_DATE_FIRST_ROW;
-    gColumn = DEFAULT_DATE_FIRST_COL;
-    gBitColumnMask = DEFAULT_DATE_FIRST_COL_BIT;
-    SetFont(DEFAULT_DATE_MONTH_FONT);
-    
-    DrawChar(BCD_H(Rtc[0]) + ZERO, DRAW_OPT_BITWISE_OR);
-    DrawChar(BCD_L(Rtc[0]) + ZERO, DRAW_OPT_BITWISE_OR);
-    
-    //Display separator
-    SetFont(DEFAULT_DATE_SEPARATOR_FONT);
-    DrawChar(DayFirst ? '.' : '/', DRAW_OPT_BITWISE_OR);
-    
-    //Display day second
-    gRow = DEFAULT_DATE_SECOND_ROW;
-    gColumn = DEFAULT_DATE_SECOND_COL;
-    gBitColumnMask = DEFAULT_DATE_SECOND_COL_BIT;
-    SetFont(DEFAULT_DATE_DAY_FONT);
-    
-    DrawChar(BCD_H(Rtc[1]) + ZERO, DRAW_OPT_BITWISE_OR);
-    DrawChar(BCD_L(Rtc[1]) + ZERO, DRAW_OPT_BITWISE_OR);
+      gRow = DEFAULT_DATE_FIRST_ROW;
+      gColumn = DEFAULT_DATE_FIRST_COL;
+      gBitColumnMask = DEFAULT_DATE_FIRST_COL_BIT;
+
+      DrawChar(BCD_H(Rtc[0]) + ZERO, DEFAULT_DATE_MONTH_FONT, DRAW_OPT_OR);
+      DrawChar(BCD_L(Rtc[0]) + ZERO, DEFAULT_DATE_MONTH_FONT, DRAW_OPT_OR);
+      
+      //Display separator
+      DrawChar(DayFirst ? '.' : '/', DEFAULT_DATE_SEPARATOR_FONT, DRAW_OPT_OR);
+      
+      //Display day second
+      gRow = DEFAULT_DATE_SECOND_ROW;
+      gColumn = DEFAULT_DATE_SECOND_COL;
+      gBitColumnMask = DEFAULT_DATE_SECOND_COL_BIT;
+
+      DrawChar(BCD_H(Rtc[1]) + ZERO, DEFAULT_DATE_DAY_FONT, DRAW_OPT_OR);
+      DrawChar(BCD_L(Rtc[1]) + ZERO, DEFAULT_DATE_DAY_FONT, DRAW_OPT_OR);
+    }
   }
   
-  SendMyBufferToLcd(STARTING_ROW, WATCH_DRAW_SCREEN_ROW_NUM);
+  WriteBufferToLcd(STARTING_ROW, WATCH_DRAW_SCREEN_ROW_NUM);
 }
 
-void HourToString(char *Hour)
+static void GetHour(char *Hour)
 {
   Hour[0] = RTCHOUR;
   
-  if (!GetProperty(PROP_24H_TIME_FORMAT))
-  {
-    Hour[0] = To12H(Hour[0]);
-    if (Hour[0] == 0) Hour[0] = 0x12; // 0am -> 12am
-  }
+  if (!GetProperty(PROP_24H_TIME_FORMAT)) Hour[0] = To12H(Hour[0]);
 
   Hour[1] = BCD_L(Hour[0]) + ZERO;
 
   Hour[0] = BCD_H(Hour[0]);
   if(!Hour[0]) Hour[0] = SPACE;
   else Hour[0] += ZERO;
-}
-
-static void DrawHours(unsigned char Op)
-{
-  char Hour[4];
-  HourToString(Hour);
   Hour[2] = COLON;
   Hour[3] = NULL;
-  DrawString(Hour, Op);
 }
 
-static void DrawMins(unsigned char Op)
+static void GetMinute(char *Min)
 {  
-  char Min[3];
-  Min[0] = BCD_H(RTCMIN) + ZERO;
-  Min[1] = BCD_L(RTCMIN) + ZERO;
-  Min[2] = NULL;
-  DrawString(Min, Op);
+  *Min++ = BCD_H(RTCMIN) + ZERO;
+  *Min++ = BCD_L(RTCMIN) + ZERO;
+  *Min = NULL;
 }
 
-static void DrawSecs(void)
+static void GetSecond(char *Sec)
 {
-  //Watch controls time - use default position
-  gRow = DEFAULT_SECS_ROW;
-  gColumn = DEFAULT_SECS_COL;
-  gBitColumnMask = DEFAULT_SECS_COL_BIT;
-  SetFont(DEFAULT_SECS_FONT);
-  
-  char Sec[4];
-  Sec[0] = COLON;
-  Sec[1] = BCD_H(RTCSEC) + ZERO;
-  Sec[2] = BCD_L(RTCSEC) + ZERO;
-  Sec[3] = NULL;
-  DrawString(Sec, DRAW_OPT_BITWISE_OR);
+  *Sec++ = COLON;
+  *Sec++ = BCD_H(RTCSEC) + ZERO;
+  *Sec++ = BCD_L(RTCSEC) + ZERO;
+  *Sec = NULL;
 }
 
-void DrawTextToLcd(DrawLcd_t *pData)
-{
-  gRow = pData->Row;
-  gColumn = pData->Col;
-  gBitColumnMask = pData->ColMask;
-  SetFont(pData->Font);
+#define STATUS_BAR_HEIGHT       12
+#define STATUS_BAR_START_ROW    0
 
-  unsigned char i;
-  for (i = 0; i < pData->Length; ++i) DrawChar(pData->pText[i], DRAW_OPT_BITWISE_OR);
+void DrawStatusBarToLcd(void)
+{
+  FillLcdBuffer(STATUS_BAR_START_ROW, STATUS_BAR_HEIGHT, LCD_BLACK);
+
+  Draw_t Info;
+//  Info.Y = STATUS_BAR_START_ROW + 3;
+//  Info.X = 2;
+
+  gRow = STATUS_BAR_START_ROW + 3;
+  gColumn = 0;
+  gBitColumnMask = BIT2;
+  char Hms[4];
+  GetHour(Hms);
+  DrawString(Hms, MetaWatch7, DRAW_OPT_NOT);
+  GetMinute(Hms);
+  DrawString(Hms, MetaWatch7, DRAW_OPT_NOT);
+
+  if (!GetProperty(PROP_24H_TIME_FORMAT))
+    DrawChar(RTCHOUR > 0x11 ? 'p' : 'a', MetaWatch7, DRAW_OPT_NOT);
+
+  if (Charging() || BatteryPercentage() <= WARNING_LEVEL)
+  {
+    Info.X = 36;
+    Info.Y = STATUS_BAR_START_ROW + 2;
+    Info.Height = IconInfo[ICON_SET_BATTERY_H].Height;
+    Info.Width = IconInfo[ICON_SET_BATTERY_H].Width << 3;
+    Info.Opt = DRAW_OPT_NOT;
+    DrawBitmapToLcd(&Info, IconInfo[ICON_SET_BATTERY_H].Width, GetIcon(ICON_SET_BATTERY_H));
+  }
+  else if (GetProperty(PROP_TIME_SECOND))
+  {
+    GetSecond(Hms);
+    gColumn = 5;
+    gBitColumnMask = BIT2;
+    DrawString(Hms, MetaWatch7, DRAW_OPT_NOT);
+  }
+
+  if (Connected(CONN_TYPE_MAIN) || !OnceConnected())
+  {
+    unsigned char DayFirst = GetProperty(PROP_DDMM_DATE_FORMAT);
+    char Rtc[2];
+    Rtc[DayFirst ? 0 : 1] = RTCDAY;
+    Rtc[DayFirst ? 1 : 0] = RTCMON;
+
+    gColumn = 8;
+    gBitColumnMask = BIT7;
+
+    DrawChar(BCD_H(Rtc[0]) + ZERO, MetaWatch7, DRAW_OPT_NOT);
+    DrawChar(BCD_L(Rtc[0]) + ZERO, MetaWatch7, DRAW_OPT_NOT);
+    DrawChar(DayFirst ? '.' : '/', MetaWatch7, DRAW_OPT_NOT);
+    DrawChar(BCD_H(Rtc[1]) + ZERO, MetaWatch7, DRAW_OPT_NOT);
+    DrawChar(BCD_L(Rtc[1]) + ZERO, MetaWatch7, DRAW_OPT_NOT);
+  }
+  else
+  {// bluetooth state 73, 3
+    Info.X = 80;
+    Info.Y = STATUS_BAR_START_ROW + 2;
+    Info.Height = IconInfo[ICON_SET_BLUETOOTH_SMALL].Height;
+    Info.Width = IconInfo[ICON_SET_BLUETOOTH_SMALL].Width << 3;
+    Info.Opt = DRAW_OPT_NOT;
+    DrawBitmapToLcd(&Info, IconInfo[ICON_SET_BLUETOOTH_SMALL].Width, GetIcon(ICON_SET_BLUETOOTH_SMALL));
+  }
+
+  WriteBufferToLcd(STATUS_BAR_START_ROW, STATUS_BAR_HEIGHT);
+}
+
+void DrawNotifPageNo(unsigned char PageNo)
+{
+  CopyColumnsIntoMyBuffer(IconInfo[ICON_NOTIF_NEXT].Data,
+    NOTIF_PAGE_NO_START_ROW, IconInfo[ICON_NOTIF_NEXT].Height,
+    11, IconInfo[ICON_NOTIF_NEXT].Width);
+
+  gRow = NOTIF_PAGE_NO_START_ROW + 2;
+  if (PageNo == 0)
+  {
+    gColumn = 8;
+    gBitColumnMask = BIT6;
+    DrawString("All!", MetaWatch5, DRAW_OPT_OR);
+  }
+  else
+  {
+    gColumn = 7;
+    gBitColumnMask = BIT3;
+    DrawChar(PageNo + ZERO, MetaWatch5, DRAW_OPT_OR);
+    DrawString(" MORE", MetaWatch5, DRAW_OPT_OR);
+  }
+
+  WriteBufferToLcd(NOTIF_PAGE_NO_START_ROW, NOTIF_PAGE_NO_END_ROW - NOTIF_PAGE_NO_START_ROW + 1);
+}
+
+static void DrawString(char const *pString, etFontType Font, unsigned char Op)
+{
+  while (*pString && gColumn < BYTES_PER_LINE)
+  {
+    DrawChar(*pString++, Font, Op);
+  }
+}
+
+void DrawTextToLcd(Draw_t *Info, char const *pText)
+{
+  gRow = Info->Y;
+  gColumn = Info->X >> 3;
+  gBitColumnMask = BIT0 << (Info->X & 0x07);
+
+  unsigned char i = 0;
+  for (; i < Info->TextLen; ++i) DrawChar(pText[i], (etFontType)Info->Id, Info->Opt);
+
 }
 
 /* fonts can be up to 16 bits wide */
-static void DrawChar(char const Char, unsigned char Op)
+static void DrawChar(char const Char, etFontType Font, unsigned char Op)
 {
-  unsigned int MaskBit = BIT0; //src
-  unsigned char Rows = GetCurrentFontHeight();
-  unsigned char CharWidth = GetCharacterWidth(Char);
-  unsigned int bitmap[MAX_FONT_ROWS];
+  tFont const *pFont = GetFont(Font);
+  unsigned char const *pBitmap = GetFontBitmap(Char, Font);
+  unsigned char CharWidth = GetCharWidth(Char, Font);
 
-  GetCharacterBitmap(Char, (unsigned int *)&bitmap);
+  unsigned char MaskBit = BIT0; //src
+  unsigned char Set; // src bit is set or clear
+  unsigned char x, y;
 
-  /* do things bit by bit */
-  unsigned char i;
-  unsigned char row;
-
-  for (i = 0; i < CharWidth && gColumn < BYTES_PER_LINE; i++)
+  for (x = 0; x < CharWidth && gColumn < BYTES_PER_LINE; ++x)
   {
-  	for (row = 0; row < Rows; row++)
+  	for (y = 0; y < pFont->Height; ++y)
     {
-//      if ((MaskBit & bitmap[row])) pMyBuffer[gRow+row].Data[gColumn] |= gBitColumnMask;
-      BitOp(&pMyBuffer[gRow+row].Data[gColumn], gBitColumnMask, MaskBit & bitmap[row], Op);
+      Set = *(pBitmap + y * pFont->WidthInBytes) & MaskBit;
+      BitOp(&LcdBuf[gRow + y].Data[gColumn], gBitColumnMask, Set, Op);
     }
 
     /* the shift direction seems backwards... */
     MaskBit <<= 1;
+    if (MaskBit == 0)
+    {
+      MaskBit = BIT0;
+      pBitmap ++;
+    }
     
     gBitColumnMask <<= 1;
     if (gBitColumnMask == 0)
     {
       gBitColumnMask = BIT0;
-      gColumn++;
+      gColumn ++;
+    }
+  }
+}
+
+void DrawBitmapToLcd(Draw_t *Info, unsigned char WidthInBytes, unsigned char const *pData)
+{
+  unsigned char Col = Info->X >> 3;
+  unsigned char ColBit = BIT0 << (Info->X & 0x07); // dst, % 8
+  unsigned char MaskBit = BIT0; //src
+  unsigned char Set; // src bit is set or clear
+  unsigned char x, y;
+
+  for (x = 0; x < Info->Width && Col < BYTES_PER_LINE; ++x)
+  {
+  	for (y = 0; y < Info->Height; ++y)
+    {
+      if (Info->Opt != DRAW_OPT_FILL) Set = *(pData + y * WidthInBytes) & MaskBit;
+      else Set = *pData & MaskBit;
+      BitOp(&LcdBuf[Info->Y + y].Data[Col], ColBit, Set, Info->Opt);
+    }
+
+    /* the shift direction seems backwards... */
+    MaskBit <<= 1;
+    if (MaskBit == 0)
+    {
+      MaskBit = BIT0;
+      if (Info->Opt != DRAW_OPT_FILL) pData ++;
+    }
+    
+    ColBit <<= 1;
+    if (ColBit == 0)
+    {
+      ColBit = BIT0;
+      Col ++;
     }
   }
 }
@@ -630,21 +903,22 @@ void BitOp(unsigned char *pByte, unsigned char Bit, unsigned int Set, unsigned c
 {
   switch (Op)
   {
-  case DRAW_OPT_BITWISE_OR:
+  case DRAW_OPT_OR:
     if (Set) *pByte |= Bit;
     break;
 
-  case DRAW_OPT_BITWISE_SET: //Set
+  case DRAW_OPT_SET:
+  case DRAW_OPT_FILL:
     if (Set) *pByte |= Bit;
     else *pByte &= ~Bit;
     break;
     
-  case DRAW_OPT_BITWISE_NOT: //~src set dst
+  case DRAW_OPT_NOT: //~src set dst
     if (Set) *pByte &= ~Bit;
     else *pByte |= Bit;
     break;
     
-  case DRAW_OPT_BITWISE_DST_NOT: //~dst
+  case DRAW_OPT_DST_NOT: //~dst
     if (*pByte & Bit) *pByte &= ~Bit;
     else *pByte |= Bit;
     break;
@@ -653,47 +927,19 @@ void BitOp(unsigned char *pByte, unsigned char Bit, unsigned int Set, unsigned c
   }
 }
 
-static void DrawString(char const *pString, unsigned char Op)
-{
-  while (*pString && gColumn < BYTES_PER_LINE)
-  {
-    DrawChar(*pString++, Op);
-  }
-}
-
-/*! Display the startup image or Splash Screen */
-void DrawSplashScreen(void)
-{
-//  ClearLcd();
-  // clear LCD buffer
-  FillMyBuffer(0, LCD_ROW_NUM, 0x00);
-
-#if COUNTDOWN_TIMER
-  DrawWwzSplashScreen();
-#else
-  /* draw metawatch logo */
-  CopyColumnsIntoMyBuffer(pIconSplashLogo, 21, 13, 3, 6);
-  CopyRowsIntoMyBuffer(pIconSplashMetaWatch, SPLASH_START_ROW, 12);
-  CopyColumnsIntoMyBuffer(pIconSplashHandsFree, 58, 5, 2, 8);
-//  SendMyBufferToLcd(21, 42); // 58 + 5 - 21
-#endif
-
-  SendMyBufferToLcd(0, LCD_ROW_NUM);
-}
-
 void DrawBootloaderScreen(void)
 {
 #if BOOTLOADER
-  FillMyBuffer(STARTING_ROW, LCD_ROW_NUM, 0x00);
+//  ClearLcd();
+  FillLcdBuffer(STARTING_ROW, LCD_ROW_NUM, LCD_WHITE);
   CopyRowsIntoMyBuffer(pBootloader, BOOTLOADER_START_ROW, BOOTLOADER_ROWS);
   
   // Draw version
-  SetFont(MetaWatch5);
   gRow = 61;
   gColumn = 4;
   gBitColumnMask = BIT3;
-  DrawString("V ", DRAW_OPT_BITWISE_OR);
-  DrawString((char const *)VERSION, DRAW_OPT_BITWISE_OR);
+  DrawString("V ", MetaWatch5, DRAW_OPT_OR);
+  DrawString((char const *)VERSION, MetaWatch5, DRAW_OPT_OR);
 
   unsigned char i = 0;
   char const *pBootVer = BootVersion;
@@ -711,45 +957,58 @@ void DrawBootloaderScreen(void)
     gRow += 7;
     gColumn = 4;
     gBitColumnMask = BIT3;
-    DrawString("B ", DRAW_OPT_BITWISE_OR);
-    DrawString(BootVersion, DRAW_OPT_BITWISE_OR);
+    DrawString("B ", MetaWatch5, DRAW_OPT_OR);
+    DrawString(BootVersion, MetaWatch5, DRAW_OPT_OR);
   }
 
-  DrawLocalAddress(1, 80);
+  DrawLocalAddress();
   
-  SendMyBufferToLcd(STARTING_ROW, LCD_ROW_NUM);
+  WriteBufferToLcd(STARTING_ROW, LCD_ROW_NUM);
 #endif
 }
 
-void FillMyBuffer(unsigned char StartRow, unsigned char RowNum, unsigned char Value)
+void DrawSplashScreen(void)
 {
+//  ClearLcd();
+  FillLcdBuffer(STARTING_ROW, LCD_ROW_NUM, LCD_WHITE);
+
+#if WWZ
+  DrawWwzSplashScreen();
+#else
+  /* draw metawatch logo */
+  CopyColumnsIntoMyBuffer(pIconSplashLogo, 21, 13, 3, 6);
+  CopyRowsIntoMyBuffer(pIconSplashMetaWatch, SPLASH_START_ROW, 12);
+  CopyColumnsIntoMyBuffer(pIconSplashHandsFree, 58, 5, 2, 8);
+//  Index = 0;
+//  WriteToBuffer(pIconSplashMetaWatch, SPLASH_START_ROW, 12, 0, 12, CLEAR);
+//  WriteToLcd(pBuf, 12);
+
+#endif
+//  WriteBufferToLcd(SPLASH_START_ROW, 12);
+//  WriteBufferToLcd(21, 58 + 5 - 21);
+  WriteBufferToLcd(STARTING_ROW, LCD_ROW_NUM);
+}
+
+void FillLcdBuffer(unsigned char StartRow, unsigned char RowNum, unsigned char Value)
+{
+  if (GetLcdBuffer() == NULL) return;
+
   unsigned char i, k;
   for (i = 0; i < RowNum; ++i)
   {
-    pMyBuffer[StartRow].Row = StartRow + FIRST_LCD_LINE_OFFSET;
-    for (k = 0; k < BYTES_PER_LINE; ++k) pMyBuffer[StartRow].Data[k] = Value;
+    LcdBuf[StartRow].Row = StartRow;
+    for (k = 0; k < BYTES_PER_LINE; ++k) LcdBuf[StartRow].Data[k] = Value;
     StartRow ++;
   }
 }
 
-void SendMyBufferToLcd(unsigned char StartRow, unsigned char RowNum)
+void WriteBufferToLcd(unsigned char StartRow, unsigned char RowNum)
 {
-  /*
-   * flip the bits before sending to LCD task because it will
-   * dma this portion of the screen
-  */
-  if (!GetProperty(PROP_INVERT_DISPLAY))
-  {
-    signed char i = StartRow + RowNum - 1;
+  WriteToLcd(&LcdBuf[StartRow], RowNum);
 
-    for (; i >= StartRow; --i)
-    {
-      unsigned char k = 0;
-      for (; k < BYTES_PER_LINE; ++k) pMyBuffer[i].Data[k] = ~(pMyBuffer[i].Data[k]);
-    }
-  }
-
-  UpdateMyDisplay((unsigned char *)&pMyBuffer[StartRow], RowNum);
+  PrintF("%04X)", LcdBuf);
+  vPortFree(LcdBuf);
+  LcdBuf = NULL;
 }
 
 void CopyRowsIntoMyBuffer(unsigned char const *pImage, unsigned char StartRow, unsigned char RowNum)
@@ -757,8 +1016,8 @@ void CopyRowsIntoMyBuffer(unsigned char const *pImage, unsigned char StartRow, u
   unsigned char i, k;
   for (i = 0; i < RowNum; ++i)
   {
-    pMyBuffer[StartRow].Row = StartRow + FIRST_LCD_LINE_OFFSET;
-    for (k = 0; k < BYTES_PER_LINE; ++k) pMyBuffer[StartRow].Data[k] = *pImage++;
+    LcdBuf[StartRow].Row = StartRow;
+    for (k = 0; k < BYTES_PER_LINE; ++k) LcdBuf[StartRow].Data[k] = *pImage++;
     StartRow ++;
   }
 }
@@ -766,17 +1025,19 @@ void CopyRowsIntoMyBuffer(unsigned char const *pImage, unsigned char StartRow, u
 #if __IAR_SYSTEMS_ICC__
 void CopyRowsIntoMyBuffer_20(unsigned char const __data20 *pImage, unsigned char StartRow, unsigned char RowNum)
 {
+  if (GetLcdBuffer() == NULL) return;
+
   unsigned char i, k;
   for (i = 0; i < RowNum; ++i)
   {
-    pMyBuffer[StartRow].Row = StartRow + FIRST_LCD_LINE_OFFSET;
-    for (k = 0; k < BYTES_PER_LINE; ++k) pMyBuffer[StartRow].Data[k] = *pImage++;
+    LcdBuf[StartRow].Row = StartRow;
+    for (k = 0; k < BYTES_PER_LINE; ++k) LcdBuf[StartRow].Data[k] = *pImage++;
     StartRow ++;
   }
 }
 #endif
 
-static void CopyColumnsIntoMyBuffer(unsigned char const* pImage,
+static void CopyColumnsIntoMyBuffer(unsigned char const *pImage,
                                     unsigned char StartRow,
                                     unsigned char RowNum,
                                     unsigned char StartCol,
@@ -793,11 +1054,11 @@ static void CopyColumnsIntoMyBuffer(unsigned char const* pImage,
   {
     DestColumn = StartCol;
     ColumnCounter = 0;
-    pMyBuffer[DestRow].Row = DestRow + FIRST_LCD_LINE_OFFSET;
+    LcdBuf[DestRow].Row = DestRow;
     
     while (DestColumn < BYTES_PER_LINE && ColumnCounter < ColNum)
     {
-      pMyBuffer[DestRow].Data[DestColumn] = pImage[SourceIndex];
+      LcdBuf[DestRow].Data[DestColumn] = pImage[SourceIndex];
 
       DestColumn ++;
       ColumnCounter ++;
@@ -809,7 +1070,12 @@ static void CopyColumnsIntoMyBuffer(unsigned char const* pImage,
   }
 }
 
-void *GetDrawBuffer(void)
+void *GetLcdBuffer(void)
 {
-  return (void *)pMyBuffer;
+  if (LcdBuf == NULL)
+  {
+    LcdBuf = (tLcdLine *)pvPortMalloc(LCD_BUFFER_SIZE);
+    if (!LcdBuf) PrintS("@LcdBuf");
+  }
+  return (void *)LcdBuf;
 }

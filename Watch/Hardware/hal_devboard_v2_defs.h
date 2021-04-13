@@ -285,12 +285,12 @@
   RTCPS0CTL = 0x0000;                       \
   RTCPS1CTL = 0x0000;                       \
   UCSCTL8 = 0x0700;                         \
-  BUTTON_PORT_REN = SW_E;                   \
-  BUTTON_PORT_OUT = SW_E;                   \
-  BUTTON_PORT_DIR &= ~SW_E;                 \
-  BUTTON_PORT_IES  =   SW_E;                \
+  BUTTON_PORT_REN = ALL_BUTTONS;                   \
+  BUTTON_PORT_OUT = ALL_BUTTONS;                   \
+  BUTTON_PORT_DIR &= ~ALL_BUTTONS;                 \
+  BUTTON_PORT_IES  =   ALL_BUTTONS;                \
   BUTTON_PORT_IFG  =   0x00;                \
-  BUTTON_PORT_IE   =   SW_E;                \
+  BUTTON_PORT_IE   =   ALL_BUTTONS;                \
 }
 
 // NOTE the the buttons are grounded. That means that we want to invert the bits
@@ -645,8 +645,14 @@
 #define USCI_ACCELEROMETER_VECTOR ( USCI_B1_VECTOR )
 #define USCI_ACCELEROMETER_IV     ( UCB1IV ) 
 
+/* IN1 on mux */
+#define MUX_CONTROL1_PDIR ( P10DIR )
+#define MUX_CONTROL1_POUT ( P10OUT )
+#define MUX_CONTROL1_PIN  ( BIT7 )
 
-
+#define MUX_CONTROL2_PDIR ( P10DIR )
+#define MUX_CONTROL2_POUT ( P10OUT )
+#define MUX_CONTROL2_PIN  ( BIT6 )
 
 #endif // HAL_DEVBOARD_V2_DEFS_H
 

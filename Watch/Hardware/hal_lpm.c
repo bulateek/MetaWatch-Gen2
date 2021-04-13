@@ -23,12 +23,11 @@
 #include "hal_lpm.h"
 #include "hal_miscellaneous.h"
 #include "HAL_UCS.h"
-#include "Messages.h"
 #include "LcdDriver.h"
 #include "DebugUart.h"
 #include "task.h"
 
-static unsigned char ShippingMode = pdFALSE;
+static unsigned char ShippingMode = FALSE;
 
 void EnterLpm3(void)
 {
@@ -38,7 +37,7 @@ void EnterLpm3(void)
      * we are already in critical section so that we do not get switched out by the
      * OS in the middle of stopping the OS Scheduler.
      */
-    if (!xTaskTickRequired()) DisableRtosTick();
+    /*if (!xTaskTickRequired())*/ DisableRtosTick();
     
     /* errata PMM11 + PMM12 divide MCLK by two before going to sleep */
     if (Errata()) MCLK_DIV(2);
@@ -73,11 +72,13 @@ void EnterLpm3(void)
 #if SUPPORT_SHIPPING_MODE
   else
   {
+    DISABLE_BUTTONS();
     /* Turn off the watchdog timer */
     WDTCTL = WDTPW + WDTHOLD;
-#ifdef DIGITAL
+
     ClearLcd();
-#endif
+    DISABLE_LCD_POWER();
+
     SET_RESET_PIN_RST();
     
     __delay_cycles(100000);
@@ -92,7 +93,7 @@ void EnterLpm3(void)
      * the patch is loaded
      */
     
-    DISABLE_LCD_POWER();
+    DISABLE_LCD_LED();
     DISABLE_LCD_ENABLE();
     BATTERY_CHARGE_DISABLE();
     LIGHT_SENSOR_SHUTDOWN();
@@ -100,13 +101,7 @@ void EnterLpm3(void)
     HARDWARE_CFG_SENSE_DISABLE();
     APPLE_POWER_DISABLE();
     ACCELEROMETER_INT_DISABLE();
-    DISABLE_BUTTONS();
-    
-#ifdef DIGITAL
-    /* SHIPPING */
-    ENABLE_SHIPPING_WAKEUP();
-#endif
-    
+
     SELECT_ACLK(SELA__REFOCLK);                
     SELECT_FLLREF(SELREF__REFOCLK); 
     UCSCTL8 &= ~SMCLKREQEN;
@@ -114,7 +109,9 @@ void EnterLpm3(void)
     /* disable aclk */
     P11SEL &= ~BIT0;
     XT1_Stop();
-    
+    /* SHIPPING */
+    ENABLE_SHIPPING_WAKEUP();
+
     /* turn off the regulator */
     PMMCTL0_H = PMMPW_H;
     PMMCTL0_L = PMMREGOFF;
@@ -123,7 +120,7 @@ void EnterLpm3(void)
     __no_operation();
     
     /* should not get here without a power event */
-    SoftwareReset();
+    SoftwareReset(RESET_SHIPMODE, 0);
   }
 #endif
 }
@@ -131,6 +128,6 @@ void EnterLpm3(void)
 void EnableShippingMode(void)
 {
 #if SUPPORT_SHIPPING_MODE
-  ShippingMode = pdTRUE;
+  ShippingMode = TRUE;
 #endif
 }

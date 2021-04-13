@@ -31,21 +31,21 @@
 #define CONN_TYPE_HFP       (0x04)
 #define CONN_TYPE_MAP       (0x08)
 #define CONN_TYPE_MWM       (0x10)
-#define CONN_TYPE_ANY       (0x1F)
+#define CONN_TYPE_ANCS      (0x20)
+#define CONN_TYPE_ANY       (0x3F)
 
 #define CONN_TYPE_BLE       (CONN_TYPE_TUNNEL | CONN_TYPE_MWM)
 #define CONN_TYPE_MAIN      (CONN_TYPE_BLE | CONN_TYPE_SPP)
 #define CONN_TYPE_BR        (CONN_TYPE_SPP | CONN_TYPE_HFP | CONN_TYPE_MAP)
+#define CONN_TYPE_BLE_ANCS  (CONN_TYPE_BLE | CONN_TYPE_ANCS)
+
+#define CONN_CHANGE_BIT     (0x80)
 
 #define CONN_CHG_CONN       (0x80)
 #define CONN_CHG_DSCONN     (0x00)
 
 /* send current conn state to remote */
-#define CONN_IND            (0x00)
-
-
-#define DEVICE_TYPE_BLE     (0x01)
-#define DEVICE_TYPE_SPP     (0x02)
+#define CONN_IND            (0x40)
 
 /* BLE connection interval parameter */
 #define LONG                0
@@ -65,9 +65,11 @@ void CreateWrapperTask(void);
 * 
 * \return 0 if micro cannot go into LPM3; 1 if micro can go into LPM3
 */
-unsigned char SerialPortReadyToSleep(void);
-
-unsigned char PairedDeviceType(void);
+unsigned char ReadyToSleep(void);
+unsigned char BlePaired(void);
+unsigned char BtPaired(void);
+unsigned char NotPaired(void);
+unsigned char HfpPaired(void);
 
 /******************************************************************************/
 
@@ -79,16 +81,15 @@ unsigned char PairedDeviceType(void);
 */
 typedef enum
 {
-  Unknown = 0,
-  Initializing,
+  Off,
   On,
   Connect,
-  Disconnect,
-  Off,
-  Shipping  
+  Initial,
+  Boot,
+  Shipping
 } eBluetoothState;
 
-/*! Determine if the bluetooth link is in the connected state.  
+/*! Determine if the bluetooth link is in the connected state.
 * When the phone and watch are connected then data can be sent.
 *
 * \return 0 when not connected, 1 when connected
@@ -132,35 +133,18 @@ unsigned char QueryConnectable(void);
  * \return 0 when valid pairing does not exist, 1 when valid pairing information
  * exists
  */
-unsigned char ValidAuthInfo(void);
+unsigned char ValidRemoteAddr(void);
 
 void GetBDAddrStr(char *pAddr);
 
-/*! Query Link Key Information
- *
- * Fills parameters with values if the Index is valid
- *
- * \param Index is an index into the bluetooth link key structure
- * \param pBluetoothAddress is a pointer to the bluetooth address (13 bytes)
- * \param pBluetoothName is a pointer to the bluetooth name 
- * \param BluetoothNameSize is the size of string pBluetoothName points to 
- */
-void GetConnectedDeviceAddress(char *pAddr);
-
-char *GetConnectedDeviceName(void);
-
-#define GAP_CONNECTABLE   (1)
-typedef struct
-{
-  unsigned int AdvIntervalMin;
-  unsigned int AdvIntervalMax;
-  unsigned char Connectable;
-} tAdvertisingPayload;
+char const *GetLocalName(void);
 
 #define INTERVAL_VALUE        0
 #define INTERVAL_STATE        1
 
-unsigned int CurrentInterval(unsigned char Prop);
+#if SUPPORT_BLE
+unsigned char CurrentInterval(unsigned char Prop);
+#endif
 
 /******************************************************************************/
 

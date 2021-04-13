@@ -16,9 +16,9 @@
 
 #include "FreeRTOS.h"
 #include "portmacro.h"
-#include "hal_boot.h"
 #include "DebugUart.h"
 #include "Property.h"
+#include "Log.h"
 #include "hal_boot.h"
 
 #define NVID_TIME_FORMAT                  ( 0x2009 )
@@ -28,15 +28,10 @@
 #define NVID_LINK_ALARM_ENABLE            ( 0x2006 )
 
 #if __IAR_SYSTEMS_ICC__
-__no_init __root unsigned int niProperty @ PROPERTY_ADDR;
+__no_init __root unsigned char niProperty @ PROPERTY_ADDR;
 #else
-extern unsigned int niProperty;
+extern unsigned char niProperty;
 #endif
-
-void InitProperty(void)
-{
-  niProperty = PROP_DEFAULT;
-}
 
 unsigned char GetProperty(unsigned char Bits)
 {
@@ -77,6 +72,7 @@ void SetProperty(unsigned char Bits, unsigned char Val)
 {
   niProperty |= Bits & Val; // set all 1 bits of Val
   niProperty &= ~Bits | Val; // set all 0 bits of Val
+  PrintF("Prop:x%02X", niProperty);
 }
 
 void ToggleProperty(unsigned char Bit)

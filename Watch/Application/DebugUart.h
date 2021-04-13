@@ -29,6 +29,8 @@
 
 extern char const OK;
 extern char const NOK;
+extern char const PLUS;
+extern char const AT;
 extern char const RCV;
 extern char const SND;
 extern char const SPACE;
@@ -40,11 +42,11 @@ extern char const DOLLAR;
 extern char const TILDE;
 extern char const DOT;
 extern char const PERCENT;
+extern char const SLASH;
 
 void EnableDebugUart(unsigned char Enable);
 void EnableTimeStamp(void);
-
-/******************************************************************************/
+void WhoAmI(void);
 
 /*! Print a  character */
 void PrintC(char Char);
@@ -69,5 +71,10 @@ void PrintF(char const *pFormat, ...);
 
 /*! Print HEX sequence with CR */
 void PrintQ(unsigned char const *pHex, unsigned char const Len);
+
+/*! Check how much statck and message queue a task is currently using
+ * \param Id is id of the message queue
+ */
+void CheckStackAndQueueUsage(unsigned char Id);
 
 #endif

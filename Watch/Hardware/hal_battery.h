@@ -24,12 +24,6 @@
 #ifndef HAL_BATTERY_H
 #define HAL_BATTERY_H
 
-#define CLIP_OFF        (0)
-#define CLIP_ON         (1)
-#define CLIP_INIT       (0xFF)
-
-void InitBattery(void);
-
 /*! Query whether or not the battery is charging */
 unsigned char Charging(void);
 
@@ -42,9 +36,11 @@ unsigned char CheckClip(void);
 /*! read battery, charging or checkbatterylow */
 void CheckBattery(void);
 
-/*!
- * \return 1 if the battery charger is enabled
+/*! Returns the average of the last 4 sensor Sense ADC cycles
+ *\return battery reading in percentage
  */
+unsigned char BatteryPercentage(void);
+
 unsigned char ChargeEnabled(void);
 void ToggleCharging(void);
 
